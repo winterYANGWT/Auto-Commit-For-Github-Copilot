@@ -7,7 +7,7 @@ export function activate(context: vscode.ExtensionContext): void {
     const panelManager = PanelManager.getInstance(context);
 
     context.subscriptions.push(
-        vscode.commands.registerCommand('autocommit.generate', () => {
+        vscode.commands.registerCommand('autocommit-for-github-copilot.generate', () => {
             void panelManager.openAndGenerate();
         })
     );

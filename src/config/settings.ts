@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import type { GenerateOptions } from '../types';
 
 export function getSettings(): GenerateOptions {
-    const config = vscode.workspace.getConfiguration('autocommit');
+    const config = vscode.workspace.getConfiguration('autocommit-for-github-copilot');
     return {
         conventionalCommits: config.get<boolean>('conventionalCommits', true),
         language: config.get<string>('language', 'en'),
@@ -10,7 +10,7 @@ export function getSettings(): GenerateOptions {
 }
 
 export async function updateSettings(partial: Partial<GenerateOptions>): Promise<void> {
-    const config = vscode.workspace.getConfiguration('autocommit');
+    const config = vscode.workspace.getConfiguration('autocommit-for-github-copilot');
     if (partial.conventionalCommits !== undefined) {
         await config.update(
             'conventionalCommits',
