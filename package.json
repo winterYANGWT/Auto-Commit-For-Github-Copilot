@@ -1,5 +1,5 @@
 {
-    "name": "autocommit",
+    "name": "autocommit-for-github-copilot",
     "displayName": "AutoCommit For Github Copilot",
     "description": "Generate smart git commit messages from staged changes using GitHub Copilot",
     "version": "0.1.0",
@@ -27,7 +27,7 @@
     "contributes": {
         "commands": [
             {
-                "command": "autocommit.generate",
+                "command": "autocommit-for-github-copilot.generate",
                 "title": "AutoCommit For Github Copilot: Generate Commits",
                 "icon": "$(sparkle)"
             }
@@ -35,21 +35,21 @@
         "menus": {
             "scm/title": [
                 {
-                    "command": "autocommit.generate",
+                    "command": "autocommit-for-github-copilot.generate",
                     "group": "navigation",
                     "when": "scmProvider == git"
                 }
             ]
         },
         "configuration": {
-            "title": "AutoCommit",
+            "title": "AutoCommit For Github Copilot",
             "properties": {
-                "autocommit.conventionalCommits": {
+                "autocommit-for-github-copilot.conventionalCommits": {
                     "type": "boolean",
                     "default": true,
                     "description": "Use Conventional Commits style (feat/fix/docs/style/refactor/test/chore)"
                 },
-                "autocommit.language": {
+                "autocommit-for-github-copilot.language": {
                     "type": "string",
                     "enum": [
                         "en",
