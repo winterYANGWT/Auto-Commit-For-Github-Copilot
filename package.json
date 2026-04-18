@@ -1,0 +1,91 @@
+{
+    "name": "autocommit",
+    "displayName": "AutoCommit For Github Copilot",
+    "description": "Generate smart git commit messages from staged changes using GitHub Copilot",
+    "version": "0.1.0",
+    "license": "GPL-3.0",
+    "publisher": "winterYANGWT",
+    "author": {
+        "name": "winterYANGWT",
+        "email": "winterYANGWT@users.noreply.github.com"
+    },
+    "engines": {
+        "vscode": "^1.90.0"
+    },
+    "categories": [
+        "Other"
+    ],
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/winterYANGWT/Auto-Commit-For-Github-Copilot"
+    },
+    "activationEvents": [],
+    "main": "./out/extension.js",
+    "extensionDependencies": [
+        "vscode.git"
+    ],
+    "contributes": {
+        "commands": [
+            {
+                "command": "autocommit.generate",
+                "title": "AutoCommit For Github Copilot: Generate Commits",
+                "icon": "$(sparkle)"
+            }
+        ],
+        "menus": {
+            "scm/title": [
+                {
+                    "command": "autocommit.generate",
+                    "group": "navigation",
+                    "when": "scmProvider == git"
+                }
+            ]
+        },
+        "configuration": {
+            "title": "AutoCommit",
+            "properties": {
+                "autocommit.conventionalCommits": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Use Conventional Commits style (feat/fix/docs/style/refactor/test/chore)"
+                },
+                "autocommit.language": {
+                    "type": "string",
+                    "enum": [
+                        "en",
+                        "zh",
+                        "auto"
+                    ],
+                    "enumDescriptions": [
+                        "English",
+                        "Chinese (中文)",
+                        "Auto-detect from current user's git log history"
+                    ],
+                    "default": "en",
+                    "description": "Language for generated commit messages"
+                }
+            }
+        }
+    },
+    "scripts": {
+        "vscode:prepublish": "npm run compile:prod",
+        "compile": "tsc -p ./ && node esbuild.webview.mjs",
+        "compile:prod": "tsc -p ./ && node esbuild.webview.mjs --production",
+        "compile:ext": "tsc -p ./",
+        "compile:webview": "node esbuild.webview.mjs",
+        "watch": "tsc -watch -p ./"
+    },
+    "devDependencies": {
+        "@types/node": "^20.0.0",
+        "@types/react": "^19.2.14",
+        "@types/react-dom": "^19.2.3",
+        "@types/vscode": "^1.90.0",
+        "esbuild": "^0.28.0",
+        "react": "^19.2.5",
+        "react-dom": "^19.2.5",
+        "typescript": "^5.4.0"
+    },
+    "dependencies": {
+        "lucide-react": "^1.8.0"
+    }
+}
