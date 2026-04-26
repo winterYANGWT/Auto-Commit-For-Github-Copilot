@@ -89,10 +89,10 @@ Control panel title bar.
 
 ## Extension Settings
 
-| Setting                          | Type                     | Default | Description                                                                      |
-| -------------------------------- | ------------------------ | ------- | -------------------------------------------------------------------------------- |
-| `autocommit.conventionalCommits` | `boolean`                | `true`  | Use Conventional Commits style (`feat/fix/docs/…`)                               |
-| `autocommit.language`            | `"en" \| "zh" \| "auto"` | `"en"`  | Language for generated commit messages. `auto` detects from your git log history |
+| Setting                                             | Type                     | Default | Description                                                                      |
+| --------------------------------------------------- | ------------------------ | ------- | -------------------------------------------------------------------------------- |
+| `autocommit-for-github-copilot.conventionalCommits` | `boolean`                | `true`  | Use Conventional Commits style (`feat/fix/docs/…`)                               |
+| `autocommit-for-github-copilot.language`            | `"en" \| "zh" \| "auto"` | `"en"`  | Language for generated commit messages. `auto` detects from your git log history |
 
 Settings can also be changed at any time from the **Configuration** panel inside the AutoCommit webview.
 
@@ -155,4 +155,4 @@ deterministic rule-based grouping below:
 
 ## License
 
-[MIT](LICENSE)
+[GPL-3.0](LICENSE)
