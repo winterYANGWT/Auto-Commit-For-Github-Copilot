@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
-import type { CommitCandidate, FileGroup, GenerateOptions, GitLogEntry } from '../types';
-import { buildBatchPrompt, buildPrompt } from './promptBuilder';
+import type { CommitCandidate, FileChange, FileGroup, GenerateOptions, GitLogEntry } from '../types';
+import { buildBatchPrompt, buildGroupingPrompt, buildPrompt } from './promptBuilder';
 
 let _modelCache: vscode.LanguageModelChat | undefined;
 let _cachedModelId: string | undefined;
@@ -231,3 +231,138 @@ function parseResponse(raw: string): { message: string; reason: string } {
 function generateId(): string {
     return Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 }
+
+// ─── AI-driven grouping + generation (single LLM call) ───────────────────────
+
+/**
+ * Sends ALL staged changes to the LLM in a single request and lets the model
+ * decide both HOW to group the files AND what commit message each group gets.
+ *
+ * Returns one CommitCandidate per AI-determined group. Every input file is
+ * guaranteed to appear in exactly one returned candidate; if the model omits
+ * or duplicates files, an Error is thrown so the caller can fall back to the
+ * rule-based grouping path.
+ */
+export async function generateGroupedCommits(
+    changes: FileChange[],
+    options: GenerateOptions,
+    token: vscode.CancellationToken,
+    recentCommits?: GitLogEntry[]
+): Promise<CommitCandidate[]> {
+    if (changes.length === 0) {
+        return [];
+    }
+
+    const model = await getModel(options.model);
+    const prompt = buildGroupingPrompt(changes, options, recentCommits);
+
+    const messages = [vscode.LanguageModelChatMessage.User(prompt)];
+    const response = await model.sendRequest(messages, {}, token);
+
+    let raw = '';
+    for await (const chunk of response.text) {
+        if (token.isCancellationRequested) {
+            throw new vscode.CancellationError();
+        }
+        raw += chunk;
+    }
+
+    const items = parseGroupingResponse(raw);
+    const validated = validateGrouping(items, changes);
+
+    return validated.map((g) => ({
+        id: generateId(),
+        message: g.message.trim(),
+        reason: g.reason.trim(),
+        files: g.files,
+        checked: true,
+    }));
+}
+
+interface ParsedGroup { message: string; reason: string; files: string[]; }
+
+function parseGroupingResponse(raw: string): ParsedGroup[] {
+    const cleaned = raw
+        .replace(/^```(?:json)?\s*/m, '')
+        .replace(/\s*```\s*$/m, '')
+        .trim();
+
+    const tryParse = (text: string): ParsedGroup[] | null => {
+        const arr = JSON.parse(text) as unknown;
+        if (!Array.isArray(arr) || arr.length === 0) {
+            return null;
+        }
+        const out: ParsedGroup[] = [];
+        for (const item of arr) {
+            if (!item || typeof item !== 'object') { return null; }
+            const rec = item as Record<string, unknown>;
+            if (
+                typeof rec.message !== 'string' ||
+                typeof rec.reason !== 'string' ||
+                !Array.isArray(rec.files) ||
+                rec.files.length === 0 ||
+                !rec.files.every((f) => typeof f === 'string')
+            ) {
+                return null;
+            }
+            out.push({
+                message: rec.message,
+                reason: rec.reason,
+                files: rec.files as string[],
+            });
+        }
+        return out;
+    };
+
+    try {
+        const result = tryParse(cleaned);
+        if (result) { return result; }
+    } catch { /* fall through */ }
+
+    const arrayMatch = cleaned.match(/\[[\s\S]*\]/);
+    if (arrayMatch) {
+        try {
+            const result = tryParse(arrayMatch[0]);
+            if (result) { return result; }
+        } catch { /* fall through */ }
+    }
+
+    throw new Error(`Could not parse grouping LLM response: ${raw.slice(0, 300)}`);
+}
+
+/**
+ * Ensures every input file is referenced exactly once across all groups.
+ * Returns the groups with file paths normalised to the original input casing/order.
+ */
+function validateGrouping(groups: ParsedGroup[], changes: FileChange[]): ParsedGroup[] {
+    const validPaths = new Set(changes.map((c) => c.path));
+    const seen = new Set<string>();
+
+    for (const g of groups) {
+        const normalised: string[] = [];
+        for (const f of g.files) {
+            if (!validPaths.has(f)) {
+                throw new Error(`LLM returned unknown file path in group: ${f}`);
+            }
+            if (seen.has(f)) {
+                throw new Error(`LLM assigned the same file to multiple groups: ${f}`);
+            }
+            seen.add(f);
+            normalised.push(f);
+        }
+        g.files = normalised;
+    }
+
+    if (seen.size !== validPaths.size) {
+        const missing: string[] = [];
+        for (const p of validPaths) {
+            if (!seen.has(p)) { missing.push(p); }
+        }
+        throw new Error(`LLM did not assign every file to a group. Missing: ${missing.join(', ')}`);
+    }
+
+    return groups;
+}
+
+// Re-export for callers that still need the rule-based FileGroup shape.
+export type { FileGroup };
