@@ -15,10 +15,13 @@ interface DiffLine {
 
 function parseDiffLines(content: string): DiffLine[] {
     if (!content) return [];
-    const lines = content.split('\n');
+    // Trim trailing newline so we don't emit a phantom empty line.
+    const text = content.endsWith('\n') ? content.slice(0, -1) : content;
+    const lines = text.split('\n');
     const result: DiffLine[] = [];
     let oldN = 0;
     let newN = 0;
+    let sawHunk = false;
 
     for (const line of lines) {
         if (line.startsWith('@@')) {
@@ -27,6 +30,7 @@ function parseDiffLines(content: string): DiffLine[] {
                 oldN = parseInt(m[1], 10);
                 newN = parseInt(m[2], 10);
             }
+            sawHunk = true;
             result.push({ type: 'hunk', sign: '', text: line, raw: line });
         } else if (
             line.startsWith('diff ') || line.startsWith('index ') ||
@@ -36,6 +40,11 @@ function parseDiffLines(content: string): DiffLine[] {
             line.charCodeAt(0) === 92
         ) {
             result.push({ type: 'meta', sign: '', text: line, raw: line });
+        } else if (!sawHunk) {
+            // Anything before the first @@ that isn't a known meta header is
+            // just header noise (or, for empty new/deleted files, nothing at
+            // all). Don't render it as a context row with phantom "0 0" gutters.
+            continue;
         } else if (line.startsWith('+')) {
             result.push({ type: 'add', newN: newN++, sign: '+', text: line.slice(1), raw: line });
         } else if (line.startsWith('-')) {
