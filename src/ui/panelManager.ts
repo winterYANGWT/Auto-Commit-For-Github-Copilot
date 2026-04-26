@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { getSettings } from '../config/settings';
 import { groupFiles, parseDiff } from '../git/diffAnalyzer';
 import { GitService } from '../git/gitService';
-import { generateForAllGroups, getAvailableModels } from '../llm/llmService';
+import { generateForAllGroups, generateGroupedCommits, getAvailableModels } from '../llm/llmService';
 import type {
     CommitCandidate,
     ExtensionMessage,
@@ -20,6 +20,7 @@ export class PanelManager {
     private sessionLanguage: string | undefined;
     private cancellation: vscode.CancellationTokenSource | undefined;
     private currentRepoRoot: string | undefined;
+    private targetRepoUri: vscode.Uri | undefined;
     private recentCommits: GitLogEntry[] = [];
 
     private constructor(private readonly context: vscode.ExtensionContext) { }
@@ -29,9 +30,40 @@ export class PanelManager {
         return PanelManager.instance;
     }
 
-    async openAndGenerate(): Promise<void> {
+    async openAndGenerate(targetRepoUri?: vscode.Uri): Promise<void> {
+        const switchingRepo =
+            !!targetRepoUri &&
+            targetRepoUri.fsPath !== this.targetRepoUri?.fsPath;
+        if (targetRepoUri) {
+            this.targetRepoUri = targetRepoUri;
+        }
+        const hadPanel = !!this.panel;
         this.ensurePanel();
+        this.updatePanelTitle();
         this.panel!.reveal(vscode.ViewColumn.One);
+
+        // If the panel already existed and the user clicked a different repo's
+        // ✨ button, refresh the staged files / commit history for the new repo.
+        // (For a fresh panel the webview will trigger this via its 'ready' message.)
+        if (hadPanel && switchingRepo) {
+            await Promise.all([
+                this.loadStagedFiles(),
+                this.loadCommitHistory(),
+            ]);
+        }
+    }
+
+    private updatePanelTitle(): void {
+        if (!this.panel) {
+            return;
+        }
+        const base = 'AutoCommit For Github Copilot';
+        if (this.targetRepoUri) {
+            const name = this.targetRepoUri.fsPath.split(/[\\/]/).pop();
+            this.panel.title = name ? `${base} — ${name}` : base;
+        } else {
+            this.panel.title = base;
+        }
     }
 
     // ─── Panel lifecycle ────────────────────────────────────────────────────────
@@ -80,9 +112,12 @@ export class PanelManager {
             case 'ready': {
                 const settings = this.effectiveSettings();
                 this.post({ type: 'settings', settings });
-                await this.loadModels();
-                await this.loadStagedFiles();
-                await this.loadCommitHistory();
+                // Run the three loads in parallel so the panel becomes interactive faster.
+                await Promise.all([
+                    this.loadModels(),
+                    this.loadStagedFiles(),
+                    this.loadCommitHistory(),
+                ]);
                 break;
             }
 
@@ -127,8 +162,10 @@ export class PanelManager {
             }
 
             case 'refresh': {
-                await this.loadStagedFiles();
-                await this.loadCommitHistory();
+                await Promise.all([
+                    this.loadStagedFiles(),
+                    this.loadCommitHistory(),
+                ]);
                 break;
             }
         }
@@ -149,7 +186,7 @@ export class PanelManager {
 
     private async loadCommitHistory(): Promise<void> {
         try {
-            const repo = await GitService.getRepository();
+            const repo = await GitService.getRepository(this.targetRepoUri);
             if (!repo) {
                 this.post({ type: 'commitHistory', commits: [] });
                 return;
@@ -165,13 +202,16 @@ export class PanelManager {
 
     private async loadStagedFiles(): Promise<void> {
         try {
-            const repo = await GitService.getRepository();
+            const repo = await GitService.getRepository(this.targetRepoUri);
             if (!repo) {
                 this.post({ type: 'stagedFiles', files: [] });
                 return;
             }
             const gitService = new GitService(repo);
             this.currentRepoRoot = gitService.repoRoot;
+            // Remember the actually-resolved repo so subsequent calls stay locked on it.
+            this.targetRepoUri = repo.rootUri;
+            this.updatePanelTitle();
             const diff = await gitService.getStagedDiff();
             if (!diff.trim()) {
                 this.post({ type: 'stagedFiles', files: [] });
@@ -203,7 +243,7 @@ export class PanelManager {
         this.post({ type: 'loading' });
 
         try {
-            const repo = await GitService.getRepository();
+            const repo = await GitService.getRepository(this.targetRepoUri);
             if (!repo) {
                 this.post({ type: 'error', message: 'No Git repository found. Make sure the workspace contains a git repository.' });
                 return;
@@ -211,6 +251,7 @@ export class PanelManager {
 
             const gitService = new GitService(repo);
             this.currentRepoRoot = gitService.repoRoot;
+            this.targetRepoUri = repo.rootUri;
 
             let settings = overrideSettings ?? this.effectiveSettings();
 
@@ -235,20 +276,39 @@ export class PanelManager {
             }
 
             const changes = parseDiff(diff);
-            const groups = groupFiles(changes);
 
             this.fileDiffs.clear();
             for (const change of changes) {
                 this.fileDiffs.set(change.path, change.diff);
             }
 
-            if (groups.length === 0) {
+            if (changes.length === 0) {
                 this.post({ type: 'error', message: 'Could not analyse the staged changes.' });
                 return;
             }
 
             try {
-                const candidates = await generateForAllGroups(groups, settings, token, this.recentCommits);
+                // Primary path: let the LLM decide how to group the files
+                // (semantic / intent-based) AND produce one commit per group
+                // in a single call.
+                let candidates: CommitCandidate[];
+                try {
+                    candidates = await generateGroupedCommits(changes, settings, token, this.recentCommits);
+                } catch (groupingErr) {
+                    if (token.isCancellationRequested || groupingErr instanceof vscode.CancellationError) {
+                        throw groupingErr;
+                    }
+                    // Fall back to the deterministic rule-based grouping if the
+                    // model returns malformed/incomplete output.
+                    console.warn('[AutoCommit] AI grouping failed, falling back to rule-based grouping:', groupingErr);
+                    const groups = groupFiles(changes);
+                    if (groups.length === 0) {
+                        this.post({ type: 'error', message: 'Could not analyse the staged changes.' });
+                        return;
+                    }
+                    candidates = await generateForAllGroups(groups, settings, token, this.recentCommits);
+                }
+
                 for (const candidate of candidates) {
                     if (token.isCancellationRequested) {
                         break;
@@ -285,13 +345,14 @@ export class PanelManager {
         const unchecked = this.candidates.filter((c) => !ids.includes(c.id));
         const uncheckedFiles = unchecked.flatMap((c) => c.files);
 
-        const repo = await GitService.getRepository();
+        const repo = await GitService.getRepository(this.targetRepoUri);
         if (!repo) {
             this.post({ type: 'error', message: 'Git repository not found.' });
             return;
         }
 
         const gitService = new GitService(repo);
+        this.targetRepoUri = repo.rootUri;
 
         try {
             await gitService.unstageAll();
@@ -325,7 +386,7 @@ export class PanelManager {
         if (content !== undefined) {
             this.post({ type: 'diffContent', path: filePath, content });
         } else {
-            const repo = await GitService.getRepository();
+            const repo = await GitService.getRepository(this.targetRepoUri);
             if (!repo) { return; }
             const gitService = new GitService(repo);
             try {

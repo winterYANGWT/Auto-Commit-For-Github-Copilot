@@ -22,6 +22,32 @@ export interface GitRepository {
     };
 }
 
+/** Picks the best matching repository given a preferred root URI. */
+function pickRepository(
+    repos: GitRepository[],
+    preferred?: vscode.Uri
+): GitRepository | undefined {
+    if (repos.length === 0) {
+        return undefined;
+    }
+    if (preferred) {
+        const hit = repos.find((r) => r.rootUri.fsPath === preferred.fsPath);
+        if (hit) {
+            return hit;
+        }
+    }
+    const active = vscode.window.activeTextEditor?.document.uri.fsPath;
+    if (active) {
+        const hit = repos
+            .filter((r) => active.startsWith(r.rootUri.fsPath))
+            .sort((a, b) => b.rootUri.fsPath.length - a.rootUri.fsPath.length)[0];
+        if (hit) {
+            return hit;
+        }
+    }
+    return repos.length === 1 ? repos[0] : undefined;
+}
+
 // ─── GitService ───────────────────────────────────────────────────────────────
 
 export class GitService {
@@ -31,8 +57,18 @@ export class GitService {
         this.repoRoot = repo.rootUri.fsPath;
     }
 
-    /** Returns the first open repository, or undefined if none found. */
-    static async getRepository(): Promise<GitRepository | undefined> {
+    /**
+     * Returns the best matching open repository.
+     *
+     * Resolution order:
+     *   1. Exact `rootUri` match against `preferred` (typically passed when the
+     *      command is invoked from a `scm/title` button — VS Code provides the
+     *      `SourceControl` instance as the first argument).
+     *   2. The deepest repository containing the active editor's file.
+     *   3. If exactly one repository is open, return it.
+     *   4. Otherwise prompt the user to pick one via QuickPick.
+     */
+    static async getRepository(preferred?: vscode.Uri): Promise<GitRepository | undefined> {
         const ext = vscode.extensions.getExtension<GitExtension>('vscode.git');
         if (!ext) {
             return undefined;
@@ -45,12 +81,34 @@ export class GitService {
             }
         }
         const api = ext.exports.getAPI(1);
-        return api.repositories[0];
+        const repos = api.repositories;
+        if (repos.length === 0) {
+            return undefined;
+        }
+
+        const auto = pickRepository(repos, preferred);
+        if (auto) {
+            return auto;
+        }
+
+        // Multiple repositories and no unambiguous winner — ask the user.
+        const pick = await vscode.window.showQuickPick(
+            repos.map((r) => ({
+                label: vscode.workspace.asRelativePath(r.rootUri, false) || r.rootUri.fsPath,
+                description: r.rootUri.fsPath,
+                repo: r,
+            })),
+            { placeHolder: 'Select a Git repository for AutoCommit' }
+        );
+        return pick?.repo;
     }
 
-    /** Returns the full staged diff text. */
+    /** Returns the full staged diff text. Forces `core.quotePath=false` so non-ASCII paths are not octal-escaped. */
     async getStagedDiff(): Promise<string> {
-        return this.repo.diff(true);
+        const { stdout } = await this.git([
+            'diff', '--cached', '--no-color',
+        ]);
+        return stdout;
     }
 
     /** Returns staged file paths (relative to repo root, forward slashes). */
@@ -108,9 +166,26 @@ export class GitService {
         await this.git(['commit', '-m', message]);
     }
 
-    /** Unstages all currently staged files. */
+    /** Unstages all currently staged files. Handles the empty-repo (no HEAD) case. */
     async unstageAll(): Promise<void> {
-        await this.git(['restore', '--staged', '.']);
+        if (await this.hasHead()) {
+            await this.git(['restore', '--staged', '.']);
+        } else {
+            // Empty repository: HEAD does not yet exist, so `git restore --staged`
+            // would fail with `fatal: could not resolve HEAD`. Clear the index
+            // directly with `rm --cached` instead — this only touches the index,
+            // not the working tree.
+            await this.git(['rm', '-r', '--cached', '--ignore-unmatch', '--', '.']);
+        }
+    }
+
+    private async hasHead(): Promise<boolean> {
+        try {
+            await this.git(['rev-parse', '--verify', '--quiet', 'HEAD']);
+            return true;
+        } catch {
+            return false;
+        }
     }
 
     /**
@@ -143,6 +218,11 @@ export class GitService {
     }
 
     private async git(args: string[]): Promise<{ stdout: string; stderr: string }> {
-        return execFileAsync('git', args, { cwd: this.repoRoot });
+        // Always disable octal-escaping of non-ASCII paths so we get UTF-8 directly.
+        return execFileAsync('git', ['-c', 'core.quotePath=false', ...args], {
+            cwd: this.repoRoot,
+            encoding: 'utf8',
+            maxBuffer: 64 * 1024 * 1024,
+        });
     }
 }
