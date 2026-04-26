@@ -10,12 +10,20 @@ export function parseDiff(rawDiff: string): FileChange[] {
     const segments = rawDiff.split(/^(?=diff --git )/m).filter(Boolean);
 
     for (const segment of segments) {
-        const headerMatch = segment.match(/^diff --git a\/.+ b\/(.+)\n/);
+        // Match either "diff --git a/PATH b/PATH" or "diff --git \"a/PATH\" \"b/PATH\""
+        // (git uses the quoted form when paths contain non-ASCII bytes and
+        // core.quotePath=true). Capture group 1 = unquoted b-path,
+        // group 2 = quoted b-path with octal-escaped bytes.
+        const headerMatch = segment.match(
+            /^diff --git (?:a\/.+? b\/(.+)|"a\/(?:[^"\\]|\\.)+" "b\/((?:[^"\\]|\\.)+)")\n/
+        );
         if (!headerMatch) {
             continue;
         }
 
-        const filePath = headerMatch[1].trimEnd();
+        const filePath = headerMatch[1]
+            ? headerMatch[1].trimEnd()
+            : unescapeGitQuotedPath(headerMatch[2]);
         let type: FileChange['type'] = 'modified';
 
         if (/^new file mode/m.test(segment)) {
@@ -30,6 +38,32 @@ export function parseDiff(rawDiff: string): FileChange[] {
     }
 
     return results;
+}
+
+/**
+ * Decodes a git "quoted" path, where non-ASCII bytes appear as `\NNN` octal
+ * escapes and a few characters use C-style escapes (\\, \", \t, \n, \r).
+ * The decoded byte sequence is interpreted as UTF-8.
+ */
+function unescapeGitQuotedPath(s: string): string {
+    const bytes: number[] = [];
+    const cEscapes: Record<string, number> = {
+        '"': 0x22, '\\': 0x5c, t: 0x09, n: 0x0a, r: 0x0d, b: 0x08, f: 0x0c, a: 0x07, v: 0x0b,
+    };
+    for (let i = 0; i < s.length; i++) {
+        const ch = s[i];
+        if (ch === '\\' && i + 3 < s.length && /[0-3]/.test(s[i + 1]) && /[0-7]/.test(s[i + 2]) && /[0-7]/.test(s[i + 3])) {
+            bytes.push(parseInt(s.substr(i + 1, 3), 8));
+            i += 3;
+        } else if (ch === '\\' && i + 1 < s.length && cEscapes[s[i + 1]] !== undefined) {
+            bytes.push(cEscapes[s[i + 1]]);
+            i += 1;
+        } else {
+            // Plain ASCII char in the quoted path
+            bytes.push(ch.charCodeAt(0) & 0xff);
+        }
+    }
+    return new TextDecoder('utf-8').decode(Uint8Array.from(bytes));
 }
 
 // ─── File grouper ─────────────────────────────────────────────────────────────
