@@ -9,6 +9,8 @@ export interface GitLogEntry {
 
 export interface FileChange {
     path: string;
+    /** Previous path for a rename; both paths are required when rebuilding the index. */
+    originalPath?: string;
     type: 'added' | 'modified' | 'deleted' | 'renamed';
     diff: string;
 }

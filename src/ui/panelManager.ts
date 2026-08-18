@@ -1,11 +1,12 @@
 import * as vscode from 'vscode';
 import { getSettings, updateSettings } from '../config/settings';
-import { groupFiles, parseDiff } from '../git/diffAnalyzer';
+import { groupFiles, parseDiff, resolveStagingPaths } from '../git/diffAnalyzer';
 import { GitService } from '../git/gitService';
 import { generateForAllGroups, generateGroupedCommits, getAvailableModels } from '../llm/llmService';
 import type {
     CommitCandidate,
     ExtensionMessage,
+    FileChange,
     GenerateOptions,
     GitLogEntry,
     WebviewMessage,
@@ -19,6 +20,7 @@ export class PanelManager {
     private panel: vscode.WebviewPanel | undefined;
     private candidates: CommitCandidate[] = [];
     private fileDiffs: Map<string, string> = new Map();
+    private fileChanges: FileChange[] = [];
     private sessionLanguage: string | undefined;
     private cancellation: vscode.CancellationTokenSource | undefined;
     private currentRepoRoot: string | undefined;
@@ -246,6 +248,7 @@ export class PanelManager {
                 return;
             }
             const changes = parseDiff(diff);
+            this.fileChanges = changes;
             this.fileDiffs.clear();
             for (const change of changes) {
                 this.fileDiffs.set(change.path, change.diff);
@@ -316,6 +319,7 @@ export class PanelManager {
             }
 
             const changes = parseDiff(diff);
+            this.fileChanges = changes;
 
             this.fileDiffs.clear();
             for (const change of changes) {
@@ -395,7 +399,10 @@ export class PanelManager {
 
         const committedIds = selected.map((c) => c.id);
         const unchecked = allCandidates.filter((c) => !committedIds.includes(c.id));
-        const uncheckedFiles = unchecked.flatMap((c) => c.files);
+        const uncheckedFiles = resolveStagingPaths(
+            unchecked.flatMap((c) => c.files),
+            this.fileChanges
+        );
 
         const repo = await GitService.getRepository(this.targetRepoUri);
         if (!repo) {
@@ -410,7 +417,8 @@ export class PanelManager {
             await gitService.unstageAll();
 
             for (const candidate of selected) {
-                await gitService.stageAndCommit(candidate.files, candidate.message);
+                const stagingPaths = resolveStagingPaths(candidate.files, this.fileChanges);
+                await gitService.stageAndCommit(stagingPaths, candidate.message);
             }
 
             if (uncheckedFiles.length > 0) {

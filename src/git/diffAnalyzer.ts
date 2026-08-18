@@ -21,10 +21,11 @@ export function parseDiff(rawDiff: string): FileChange[] {
             continue;
         }
 
-        const filePath = headerMatch[1]
+        let filePath = headerMatch[1]
             ? headerMatch[1].trimEnd()
             : unescapeGitQuotedPath(headerMatch[2]);
         let type: FileChange['type'] = 'modified';
+        let originalPath: string | undefined;
 
         if (/^new file mode/m.test(segment)) {
             type = 'added';
@@ -32,12 +33,40 @@ export function parseDiff(rawDiff: string): FileChange[] {
             type = 'deleted';
         } else if (/^rename /m.test(segment)) {
             type = 'renamed';
+            const renameFrom = segment.match(/^rename from (.+)$/m);
+            const renameTo = segment.match(/^rename to (.+)$/m);
+            if (renameFrom && renameTo) {
+                originalPath = decodeDiffPath(renameFrom[1]);
+                filePath = decodeDiffPath(renameTo[1]);
+            }
         }
 
-        results.push({ path: filePath, type, diff: segment });
+        results.push({ path: filePath, originalPath, type, diff: segment });
     }
 
     return results;
+}
+
+/** Expands renamed files to both pathspecs needed to stage the complete rename. */
+export function resolveStagingPaths(files: string[], changes: FileChange[]): string[] {
+    const changesByPath = new Map(changes.map((change) => [change.path, change]));
+    const paths = new Set<string>();
+
+    for (const file of files) {
+        const change = changesByPath.get(file);
+        if (change?.type === 'renamed' && change.originalPath) {
+            paths.add(change.originalPath);
+        }
+        paths.add(file);
+    }
+
+    return [...paths];
+}
+
+function decodeDiffPath(value: string): string {
+    return value.startsWith('"') && value.endsWith('"')
+        ? unescapeGitQuotedPath(value.slice(1, -1))
+        : value;
 }
 
 /**
