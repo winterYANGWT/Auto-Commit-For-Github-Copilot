@@ -1,6 +1,7 @@
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import * as vscode from 'vscode';
+import { validateGitIdentity } from './gitIdentity';
 
 const execFileAsync = promisify(execFile);
 
@@ -164,6 +165,24 @@ export class GitService {
     async stageAndCommit(files: string[], message: string): Promise<void> {
         await this.git(['add', '--', ...files]);
         await this.git(['commit', '-m', message]);
+    }
+
+    /** Rejects before index mutation when Git's configured author identity is incomplete. */
+    async assertCommitIdentityConfigured(): Promise<void> {
+        const [name, email] = await Promise.all([
+            this.getOptionalConfig('user.name'),
+            this.getOptionalConfig('user.email'),
+        ]);
+        validateGitIdentity(name, email);
+    }
+
+    private async getOptionalConfig(key: string): Promise<string | undefined> {
+        try {
+            const { stdout } = await this.git(['config', '--get', key]);
+            return stdout.trim() || undefined;
+        } catch {
+            return undefined;
+        }
     }
 
     /** Unstages all currently staged files. Handles the empty-repo (no HEAD) case. */

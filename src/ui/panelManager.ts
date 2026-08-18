@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { getSettings, updateSettings } from '../config/settings';
 import { groupFiles, parseDiff, resolveStagingPaths } from '../git/diffAnalyzer';
+import { GitIdentityError } from '../git/gitIdentity';
 import { GitService } from '../git/gitService';
 import { generateForAllGroups, generateGroupedCommits, getAvailableModels } from '../llm/llmService';
 import type {
@@ -414,6 +415,7 @@ export class PanelManager {
         this.targetRepoUri = repo.rootUri;
 
         try {
+            await gitService.assertCommitIdentityConfigured();
             await gitService.unstageAll();
 
             for (const candidate of selected) {
@@ -436,7 +438,12 @@ export class PanelManager {
             await this.loadStagedFiles();
             await this.loadCommitHistory();
         } catch (err) {
-            this.post({ type: 'error', message: `Commit failed: ${String(err)}` });
+            this.post({
+                type: 'error',
+                message: err instanceof GitIdentityError
+                    ? err.message
+                    : `Commit failed: ${String(err)}`,
+            });
         }
     }
 
