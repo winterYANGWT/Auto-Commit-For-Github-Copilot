@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.1] - 2026-08-19
+
+Changes from 0.3.0 to 0.3.1.
+
+### Fixed
+
+- Preserve both the original and destination paths when committing renamed files so the old path is removed instead of being left as an unstaged deletion.
+- Validate `user.name` and `user.email` before changing the Git index, preventing failed commits from disturbing staged changes when the user identity is not configured.
+
 ## [0.3.0] - 2026-06-02
 
 Changes from 0.2.0 to 0.3.0.
