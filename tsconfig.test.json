@@ -7,6 +7,7 @@
     "include": [
         "src/types.ts",
         "src/git/diffAnalyzer.ts",
+        "src/git/gitIdentity.ts",
         "tests/**/*.ts"
     ],
     "exclude": []
